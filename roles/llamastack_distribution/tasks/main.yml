@@ -87,7 +87,7 @@
       spec:
         to:
           kind: Service
-          name: {{ llamastack_distribution.name }}
+          name: {{ llamastack_distribution.name }}-service
           weight: 100
         port:
           targetPort: {{ llamastack_distribution.port }}
@@ -107,7 +107,71 @@
 
 - name: Set distribution route URL fact
   ansible.builtin.set_fact:
-    distribution_route_url: "http://{{ distribution_route_info.resources[0].spec.host }}"
+    distribution_route_url: "https://{{ distribution_route_info.resources[0].spec.host }}"
+
+- name: Wait for LlamaStack Distribution service to be ready
+  ansible.builtin.pause:
+    seconds: 30
+  when: distribution_route_info.resources | length > 0
+
+- name: Smoke test - Check LlamaStack Distribution health endpoint
+  ansible.builtin.uri:
+    url: "{{ distribution_route_url }}/v1/health"
+    method: GET
+    validate_certs: false
+    status_code: 200
+    timeout: 30
+  register: health_check
+  retries: 5
+  delay: 10
+  until: health_check.status == 200
+
+- name: Display health check success
+  ansible.builtin.debug:
+    msg: "✅ Health endpoint is responding: {{ health_check.status }}"
+  when: health_check is defined and health_check.status is defined
+
+- name: Smoke test - Get available models
+  ansible.builtin.uri:
+    url: "{{ distribution_route_url }}/v1/models"
+    method: GET
+    validate_certs: false
+    status_code: 200
+    timeout: 30
+  register: models_check
+  retries: 5
+  delay: 10
+  until: models_check.status == 200
+
+- name: Parse models response
+  ansible.builtin.set_fact:
+    models_data: "{{ models_check.json }}"
+  when: models_check is defined and models_check.json is defined
+
+- name: Display models smoke test success
+  ansible.builtin.debug:
+    msg: "✅ Models endpoint is responding: {{ models_check.status }}"
+  when: models_check is defined and models_check.status is defined
+
+- name: Display available models
+  ansible.builtin.debug:
+    msg: "🎯 Available Models:"
+  when: models_data is defined
+
+- name: Display LLM model
+  ansible.builtin.debug:
+    msg: "• LLM Model: {{ models_data.data | selectattr('model_type', 'equalto', 'llm') | map(attribute='identifier') | first | default('Not found') }}"
+  when: models_data is defined and models_data.data is defined
+
+- name: Display embedding model
+  ansible.builtin.debug:
+    msg: "• Embedding Model: {{ models_data.data | selectattr('model_type', 'equalto', 'embedding') | map(attribute='identifier') | first | default('Not found') }}"
+  when: models_data is defined and models_data.data is defined
+
+- name: Display total models count
+  ansible.builtin.debug:
+    msg: "• Total Models: {{ models_data.data | length }}"
+  when: models_data is defined and models_data.data is defined
 
 - name: Display LlamaStack Distribution completion
   ansible.builtin.debug:
@@ -147,7 +211,15 @@
 
 - name: Display API access
   ansible.builtin.debug:
-    msg: "• API Endpoint: {{ distribution_route_url }}/api"
+    msg: "• API Documentation: {{ distribution_route_url }}/docs"
+
+- name: Display models endpoint
+  ansible.builtin.debug:
+    msg: "• Models Endpoint: {{ distribution_route_url }}/v1/models"
+
+- name: Display chat completions endpoint
+  ansible.builtin.debug:
+    msg: "• Chat Completions: {{ distribution_route_url }}/v1/openai/v1/chat/completions"
 
 - name: Display monitoring commands
   ansible.builtin.debug:
