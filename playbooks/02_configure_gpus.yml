@@ -1,0 +1,62 @@
+---
+- name: STEP 2 - Configure cluster to use GPUs (NFD + NVIDIA GPU Operator)
+  hosts: local
+  gather_facts: false
+
+  module_defaults:
+    kubernetes.core.k8s:
+      kubeconfig: "{{ kubeconfig }}"
+    kubernetes.core.k8s_info:
+      kubeconfig: "{{ kubeconfig }}"
+
+  vars_files:
+    - ../group_vars/all.yml
+
+  roles:
+    - nfd_operator
+    - gpu_operator
+
+  tasks:
+    - name: Verify NFD labeled at least one NVIDIA GPU node
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Node
+        label_selectors:
+          - "{{ gpu_pci_label_selector }}"
+      register: nvidia_nodes
+      failed_when: false
+
+    - name: Warn if no GPU-labeled nodes found (you may need to add a GPU machine pool)
+      ansible.builtin.debug:
+        msg: "No nodes labeled with {{ gpu_pci_label_selector }} yet. Ensure a GPU node pool is present and NFD has finished scanning."
+      when: (nvidia_nodes.resources | length) == 0
+
+    - name: Check node capacity for nvidia.com/gpu
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Node
+      register: all_nodes
+
+    - name: Compute nodes with GPU capacity
+      ansible.builtin.set_fact:
+        nodes_with_gpu: >-
+          {%- set gpu_nodes = [] -%}
+          {%- for node in all_nodes.resources -%}
+            {%- if node.status.capacity is defined and node.status.capacity['nvidia.com/gpu'] is defined -%}
+              {%- set _ = gpu_nodes.append(node) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ gpu_nodes }}
+
+    - name: Display GPU capacity detection results
+      ansible.builtin.debug:
+        msg: |
+          ✅ Found {{ nodes_with_gpu | length }} node(s) with GPU capacity:
+          {% for node in nodes_with_gpu %}
+          • {{ node.metadata.name }}: {{ node.status.capacity['nvidia.com/gpu'] }} GPU(s)
+          {% endfor %}
+
+    - name: Fail if cluster shows no nvidia.com/gpu capacity
+      ansible.builtin.fail:
+        msg: "No nodes report nvidia.com/gpu capacity. Ensure GPU Operator finished and GPUs are visible."
+      when: (nodes_with_gpu | length) == 0

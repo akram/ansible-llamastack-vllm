@@ -1,0 +1,132 @@
+---
+- name: Assert HF token provided
+  ansible.builtin.assert:
+    that:
+      - hf_token | length > 0
+    fail_msg: "No HF token found. Set 'hf_token' var or export HF_TOKEN env var."
+
+- name: Ensure llamastack namespace exists
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ llamastack_ns }}"
+
+- name: Create/Update HF token secret
+  kubernetes.core.k8s:
+    state: present
+    definition: |
+      apiVersion: v1
+      kind: Secret
+      type: Opaque
+      metadata:
+        name: {{ hf_secret_name }}
+        namespace: {{ llamastack_ns }}
+      stringData:
+        HF_TOKEN: "{{ hf_token }}"
+
+- name: Download chat template ConfigMap from upstream
+  ansible.builtin.get_url:
+    url: "{{ llama_template_url }}"
+    dest: "{{ playbook_dir }}/../.tmp_template.yaml"
+    force: true
+
+- name: Apply chat template ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    src: "{{ playbook_dir }}/../.tmp_template.yaml"
+    namespace: "{{ llamastack_ns }}"
+
+- name: Deploy vLLM Deployment
+  kubernetes.core.k8s:
+    state: present
+    template: "vllm-deployment.yaml.j2"
+
+- name: Wait for vLLM Deployment to be available
+  kubernetes.core.k8s_info:
+    kind: Deployment
+    api_version: apps/v1
+    name: vllm
+    namespace: "{{ llamastack_ns }}"
+  register: vllm_dep
+  retries: 60
+  delay: 10
+  until: >
+    vllm_dep.resources | length > 0 and
+    (vllm_dep.resources[0].status.availableReplicas | default(0)) | int >= 1
+
+- name: Wait for vLLM Pod to be ready
+  kubernetes.core.k8s_info:
+    kind: Pod
+    api_version: v1
+    namespace: "{{ llamastack_ns }}"
+    label_selectors:
+      - "app=vllm"
+  register: vllm_pods
+  retries: 60
+  delay: 60
+  until: >
+    vllm_pods.resources | length > 0 and
+    vllm_pods.resources[0].status.phase == "Running" and
+    vllm_pods.resources[0].status.conditions | selectattr('type', 'equalto', 'Ready') | selectattr('status', 'equalto', 'True') | list | length > 0
+
+- name: Display vLLM startup confirmation
+  ansible.builtin.debug:
+    msg: "✅ vLLM server has started successfully and is ready to accept requests"
+
+- name: Create Service
+  kubernetes.core.k8s:
+    state: present
+    template: "vllm-service.yaml.j2"
+
+- name: Create/OpenShift Route
+  kubernetes.core.k8s:
+    state: present
+    template: "vllm-route.yaml.j2"
+
+- name: Read Route host
+  kubernetes.core.k8s_info:
+    api_version: route.openshift.io/v1
+    kind: Route
+    name: vllm
+    namespace: "{{ llamastack_ns }}"
+  register: route_info
+
+- name: Set route URL fact
+  ansible.builtin.set_fact:
+    vllm_route_url: "http://{{ (route_info.resources[0].spec.host) | default('') }}"
+
+- name: Show route URL
+  ansible.builtin.debug:
+    msg: "vLLM route: {{ vllm_route_url }}"
+
+- name: Wait for vLLM service to be ready
+  ansible.builtin.uri:
+    url: "{{ vllm_route_url }}/health"
+    method: GET
+    status_code: 200
+  register: health_check
+  retries: 20
+  delay: 10
+  until: health_check.status == 200
+
+- name: Smoke test the vLLM endpoint
+  ansible.builtin.uri:
+    url: "{{ vllm_route_url }}/v1/chat/completions"
+    method: POST
+    headers:
+      Content-Type: application/json
+    body_format: json
+    body:
+      messages:
+        - role: user
+          content: "{{ smoke_test_prompt }}"
+    return_content: true
+    status_code: 200
+  register: smoke
+
+- name: Print response summary
+  ansible.builtin.debug:
+    var: smoke.json

@@ -1,0 +1,235 @@
+---
+- name: Ensure NVIDIA GPU Operator namespace exists
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ gpu_operator.namespace }}"
+
+- name: Ensure OperatorGroup for GPU Operator
+  kubernetes.core.k8s:
+    state: present
+    definition: |
+      apiVersion: operators.coreos.com/v1
+      kind: OperatorGroup
+      metadata:
+        name: "{{ gpu_operator.operatorgroup_name }}"
+        namespace: "{{ gpu_operator.namespace }}"
+      spec:
+        targetNamespaces:
+          - "{{ gpu_operator.namespace }}"
+
+- name: (Optional) Detect default channel for gpu-operator-certified if none provided
+  when: gpu_operator.channel | length == 0
+  block:
+    - name: Read PackageManifest for gpu-operator-certified
+      kubernetes.core.k8s_info:
+        api_version: packages.operators.coreos.com/v1
+        kind: PackageManifest
+        namespace: "{{ gpu_operator.source_namespace }}"
+        name: "{{ gpu_operator.package }}"
+      register: pkg
+
+    - name: Set detected channel
+      ansible.builtin.set_fact:
+        gpu_detected_channel: "{{ pkg.resources[0].status.defaultChannel | default('stable') }}"
+
+- name: Install NVIDIA GPU Operator via Subscription
+  kubernetes.core.k8s:
+    state: present
+    definition: |
+      apiVersion: operators.coreos.com/v1alpha1
+      kind: Subscription
+      metadata:
+        name: "{{ gpu_operator.package }}"
+        namespace: "{{ gpu_operator.namespace }}"
+      spec:
+        channel: "{{ (gpu_operator.channel | length > 0) | ternary(gpu_operator.channel, (gpu_detected_channel | default('stable'))) }}"
+        installPlanApproval: Automatic
+        name: "{{ gpu_operator.package }}"
+        source: "{{ gpu_operator.source }}"
+        sourceNamespace: "{{ gpu_operator.source_namespace }}"
+
+- name: Wait for ClusterPolicy CRD to exist (installed by GPU Operator)
+  kubernetes.core.k8s_info:
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: clusterpolicies.nvidia.com
+  register: cp_crd
+  retries: 60
+  delay: 10
+  until: cp_crd.resources | length > 0
+
+- name: Create default ClusterPolicy to enable GPU stack
+  kubernetes.core.k8s:
+    state: present
+    definition: |
+      apiVersion: nvidia.com/v1
+      kind: ClusterPolicy
+      metadata:
+        name: gpu-cluster-policy
+      spec:
+        daemonsets: {}
+        dcgm: {}
+        dcgmExporter: {}
+        devicePlugin: {}
+        driver: {}
+        gfd: {}
+        nodeStatusExporter: {}
+        operator: {}
+        toolkit: {}
+
+- name: Display GPU operator deployment success
+  ansible.builtin.debug:
+    msg: "🚀 NVIDIA GPU Operator has been deployed successfully!"
+
+- name: Display what's happening now
+  ansible.builtin.debug:
+    msg: "📋 What's happening now:"
+
+- name: Display driver compilation info
+  ansible.builtin.debug:
+    msg: "• The NVIDIA driver is being compiled for your OpenShift kernel"
+
+- name: Display timing info
+  ansible.builtin.debug:
+    msg: "• This process typically takes {{ gpu_operator.driver_install_wait_minutes }} minutes"
+
+- name: Display background process info
+  ansible.builtin.debug:
+    msg: "• The driver compilation happens in the background using OpenShift Driver Toolkit"
+
+- name: Display monitoring instructions
+  ansible.builtin.debug:
+    msg: "🔍 You can monitor progress with:"
+
+- name: Display kubectl watch command
+  ansible.builtin.debug:
+    msg: "kubectl get pods -n nvidia-gpu-operator -w"
+
+- name: Display kubectl logs command
+  ansible.builtin.debug:
+    msg: "kubectl logs -n nvidia-gpu-operator -l app=nvidia-driver-daemonset"
+
+- name: Display wait message
+  ansible.builtin.debug:
+    msg: "⏳ Waiting {{ gpu_operator.driver_install_wait_minutes }} minutes for driver installation to complete..."
+  when: not gpu_operator.skip_driver_wait and gpu_operator.driver_install_wait_minutes | int > 0
+
+- name: Display skip wait message
+  ansible.builtin.debug:
+    msg: "⏭️ Skipping wait - driver installation will continue in the background"
+  when: gpu_operator.skip_driver_wait or gpu_operator.driver_install_wait_minutes | int == 0
+
+- name: Wait for NVIDIA driver installation to complete (with active polling)
+  kubernetes.core.k8s_info:
+    api_version: nvidia.com/v1
+    kind: ClusterPolicy
+    name: gpu-cluster-policy
+  register: cluster_policy_status
+  retries: "{{ (gpu_operator.driver_install_wait_minutes | int * 60) // 30 }}"
+  delay: 30
+  until: cluster_policy_status.resources[0].status.state == "ready"
+  when: not gpu_operator.skip_driver_wait and gpu_operator.driver_install_wait_minutes | int > 0
+
+- name: Display polling progress
+  ansible.builtin.debug:
+    msg: "🔍 Polling ClusterPolicy status every 30 seconds..."
+  when: not gpu_operator.skip_driver_wait and gpu_operator.driver_install_wait_minutes | int > 0 and cluster_policy_status is defined
+
+- name: Display current status
+  ansible.builtin.debug:
+    msg: "Current status: {{ cluster_policy_status.resources[0].status.state | default('unknown') }}"
+  when: not gpu_operator.skip_driver_wait and gpu_operator.driver_install_wait_minutes | int > 0 and cluster_policy_status is defined
+
+- name: Display conditions
+  ansible.builtin.debug:
+    msg: "Conditions: {{ cluster_policy_status.resources[0].status.conditions | map(attribute='message') | select('string') | join(', ') }}"
+  when: not gpu_operator.skip_driver_wait and gpu_operator.driver_install_wait_minutes | int > 0 and cluster_policy_status is defined and cluster_policy_status.resources[0].status.conditions is defined
+
+- name: Display GPU driver installation completion
+  ansible.builtin.debug:
+    msg: "✅ NVIDIA GPU driver installation completed!"
+  when: not gpu_operator.skip_driver_wait and cluster_policy_status.resources[0].status.state == "ready"
+
+- name: Display next steps header
+  ansible.builtin.debug:
+    msg: "🎯 Next steps:"
+  when: not gpu_operator.skip_driver_wait and cluster_policy_status.resources[0].status.state == "ready"
+
+- name: Display GPU resources available
+  ansible.builtin.debug:
+    msg: "• GPU resources should now be available on your nodes"
+  when: not gpu_operator.skip_driver_wait and cluster_policy_status.resources[0].status.state == "ready"
+
+- name: Display vLLM deployment ready
+  ansible.builtin.debug:
+    msg: "• You can proceed with vLLM deployment"
+  when: not gpu_operator.skip_driver_wait and cluster_policy_status.resources[0].status.state == "ready"
+
+- name: Display GPU capacity check command
+  ansible.builtin.debug:
+    msg: "• Check GPU capacity: kubectl describe nodes | grep nvidia.com/gpu"
+  when: not gpu_operator.skip_driver_wait and cluster_policy_status.resources[0].status.state == "ready"
+
+- name: Display timeout warning
+  ansible.builtin.debug:
+    msg: "⚠️ GPU driver installation is taking longer than expected ({{ gpu_operator.driver_install_wait_minutes }} minutes)"
+  when: not gpu_operator.skip_driver_wait and cluster_policy_status.resources[0].status.state != "ready"
+
+- name: Display timeout current status
+  ansible.builtin.debug:
+    msg: "🔍 Current status: {{ cluster_policy_status.resources[0].status.state | default('unknown') }}"
+  when: not gpu_operator.skip_driver_wait and cluster_policy_status.resources[0].status.state != "ready"
+
+- name: Display timeout conditions
+  ansible.builtin.debug:
+    msg: "Conditions: {{ cluster_policy_status.resources[0].status.conditions | map(attribute='message') | select('string') | join(', ') }}"
+  when: not gpu_operator.skip_driver_wait and cluster_policy_status.resources[0].status.state != "ready" and cluster_policy_status.resources[0].status.conditions is defined
+
+- name: Display manual monitoring header
+  ansible.builtin.debug:
+    msg: "📋 You can continue monitoring manually:"
+  when: not gpu_operator.skip_driver_wait and cluster_policy_status.resources[0].status.state != "ready"
+
+- name: Display clusterpolicy command
+  ansible.builtin.debug:
+    msg: "kubectl get clusterpolicy gpu-cluster-policy -o yaml"
+  when: not gpu_operator.skip_driver_wait and cluster_policy_status.resources[0].status.state != "ready"
+
+- name: Display pods watch command
+  ansible.builtin.debug:
+    msg: "kubectl get pods -n nvidia-gpu-operator -w"
+  when: not gpu_operator.skip_driver_wait and cluster_policy_status.resources[0].status.state != "ready"
+
+- name: Display proceed message
+  ansible.builtin.debug:
+    msg: "🎯 Once the driver installation completes, you can proceed with vLLM deployment"
+  when: not gpu_operator.skip_driver_wait and cluster_policy_status.resources[0].status.state != "ready"
+
+- name: Display skipped wait progress
+  ansible.builtin.debug:
+    msg: "🔄 NVIDIA GPU driver installation is in progress..."
+  when: gpu_operator.skip_driver_wait
+
+- name: Display skipped wait monitoring header
+  ansible.builtin.debug:
+    msg: "📋 To monitor progress manually:"
+  when: gpu_operator.skip_driver_wait
+
+- name: Display skipped wait pods command
+  ansible.builtin.debug:
+    msg: "kubectl get pods -n nvidia-gpu-operator -w"
+  when: gpu_operator.skip_driver_wait
+
+- name: Display skipped wait clusterpolicy command
+  ansible.builtin.debug:
+    msg: "kubectl get clusterpolicy gpu-cluster-policy -o yaml"
+  when: gpu_operator.skip_driver_wait
+
+- name: Display skipped wait proceed message
+  ansible.builtin.debug:
+    msg: "🎯 Once complete, you can proceed with vLLM deployment"
+  when: gpu_operator.skip_driver_wait

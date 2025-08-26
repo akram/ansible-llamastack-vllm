@@ -1,0 +1,70 @@
+# Path to your kubeconfig (assumes you're already logged in with `oc`).
+kubeconfig: "{{ lookup('env', 'KUBECONFIG') | default('~/.kube/config', true) }}"
+
+# STEP 0: Red Hat OpenShift AI (RHOAI) configuration
+rhoai:
+  namespace: "redhat-ods-operator"
+  operatorgroup_name: "rhoai-operator-group"
+  package: "rhods-operator"
+  source: "redhat-operators"
+  source_namespace: "openshift-marketplace"
+  channel: "stable"
+  dsc_name: "default-dsc"
+
+# STEP 1: Llama Stack operator manifest
+llamastack_operator_url: "https://raw.githubusercontent.com/llamastack/llama-stack-k8s-operator/main/release/operator.yaml"
+
+# STEP 2: GPU prerequisites (NFD + NVIDIA GPU Operator)
+nfd:
+  namespace: "openshift-nfd"
+  operatorgroup_name: "nfd-operator-group"
+  package: "nfd"
+  source: "redhat-operators"
+  source_namespace: "openshift-marketplace"
+  channel: "stable"   # override if needed
+
+gpu_operator:
+  namespace: "nvidia-gpu-operator"
+  operatorgroup_name: "nvidia-gpu-operator-group"
+  package: "gpu-operator-certified"
+  source: "certified-operators"
+  source_namespace: "openshift-marketplace"
+  channel: ""  # leave empty to auto-detect the defaultChannel via PackageManifest
+  driver_install_wait_minutes: 15  # Time to wait for NVIDIA driver installation to complete (set to 0 to skip wait)
+  skip_driver_wait: false  # Set to true to skip the driver installation wait entirely
+
+# Label that indicates NVIDIA (10de) PCI is present on the node (set by NFD)
+gpu_pci_label_selector: "feature.node.kubernetes.io/pci-10de.present=true"
+
+# STEP 3: vLLM standalone deployment
+llamastack_ns: "llamastack"
+
+# Provide your HF token via var or env: export HF_TOKEN=xxx
+hf_token: "{{ lookup('env', 'HF_TOKEN') | default('', true) }}"
+hf_secret_name: "hf-token-secret"
+
+# Chat template for llama 3.2 JSON tools (pulled remotely)
+llama_template_url: "https://raw.githubusercontent.com/redhat-et/agent-frameworks/refs/heads/main/prototype/frameworks/llamastack/kubernetes/llama-serve/template.yaml"
+
+# vLLM image + model
+vllm_image: "vllm/vllm-openai:v0.8.5"
+vllm_port: 8000
+vllm_model: "meta-llama/Llama-3.2-3B-Instruct"
+vllm_dtype: "half"
+vllm_max_model_len: 8192
+
+# GPU resources
+vllm_gpu_count: "1"
+
+# Smoke test prompt
+smoke_test_prompt: "Hello"
+
+# STEP 4: LlamaStack Distribution with vLLM and Milvus DB
+llamastack_distribution:
+  name: "llama-test-milvus-v2"
+  replicas: 1
+  image: "quay.io/opendatahub/llama-stack:odh"
+  inference_model: "meta-llama/Llama-3.2-3B-Instruct"
+  port: 8321
+  milvus_db_path: "/tmp/milvus.db"
+  fms_orchestrator_url: "http://trustyai-service.redhat-ods-applications.svc.cluster.local:8080"

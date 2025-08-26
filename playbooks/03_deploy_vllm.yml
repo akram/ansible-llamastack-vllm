@@ -1,0 +1,16 @@
+---
+- name: STEP 3 - Deploy standalone vLLM, expose Route, smoke-test
+  hosts: local
+  gather_facts: false
+
+  module_defaults:
+    kubernetes.core.k8s:
+      kubeconfig: "{{ kubeconfig }}"
+    kubernetes.core.k8s_info:
+      kubeconfig: "{{ kubeconfig }}"
+
+  vars_files:
+    - ../group_vars/all.yml
+
+  roles:
+    - vllm

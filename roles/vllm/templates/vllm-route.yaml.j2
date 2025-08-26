@@ -1,0 +1,11 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: vllm
+  namespace: {{ llamastack_ns }}
+spec:
+  to:
+    kind: Service
+    name: vllm
+  port:
+    targetPort: {{ vllm_port }}

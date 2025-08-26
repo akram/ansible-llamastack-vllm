@@ -1,0 +1,89 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm
+  namespace: {{ llamastack_ns }}
+  labels:
+    app: vllm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vllm
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+  template:
+    metadata:
+      labels:
+        app: vllm
+    spec:
+      containers:
+      - name: vllm
+        image: {{ vllm_image | quote }}
+        imagePullPolicy: IfNotPresent
+        args:
+          - --model
+          - {{ vllm_model | quote }}
+          - --enable-auto-tool-choice
+          - --chat-template
+          - /app/tool_chat_template_llama3.2_json.jinja
+          - --tool-call-parser
+          - llama3_json
+          - --port
+          - "{{ vllm_port }}"
+          - --dtype
+          - {{ vllm_dtype | quote }}
+          - --max-model-len
+          - "{{ vllm_max_model_len }}"
+        env:
+          - name: VLLM_PORT
+            value: "{{ vllm_port }}"
+          - name: HUGGING_FACE_HUB_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: {{ hf_secret_name }}
+                key: HF_TOKEN
+        ports:
+          - containerPort: {{ vllm_port }}
+            protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: {{ vllm_port }}
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: {{ vllm_port }}
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        resources:
+          limits:
+            nvidia.com/gpu: "{{ vllm_gpu_count }}"
+        volumeMounts:
+          - name: hf-cache
+            mountPath: /.cache
+          - name: triton
+            mountPath: /.triton
+          - name: chat-template
+            mountPath: /app
+          - name: config
+            mountPath: /.config
+      volumes:
+        - name: hf-cache
+          emptyDir: {}
+        - name: triton
+          emptyDir: {}
+        - name: chat-template
+          configMap:
+            name: template
+        - name: config
+          emptyDir: {}

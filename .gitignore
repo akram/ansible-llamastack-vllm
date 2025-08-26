@@ -1,0 +1,38 @@
+# Python virtual environment
+.venv/
+venv/
+env/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Ansible
+*.retry
+.ansible/
+
+# Temporary files
+.tmp_*
+*.tmp
+*.log
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Kubernetes temporary files
+*.yaml.bak
+*.yml.bak
+
+# Local configuration overrides
+local_vars.yml
+secrets.yml

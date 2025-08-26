@@ -1,0 +1,6 @@
+---
+- import_playbook: playbooks/00_install_rhoai.yml
+- import_playbook: playbooks/01_install_llama_operator.yml
+- import_playbook: playbooks/02_configure_gpus.yml
+- import_playbook: playbooks/03_deploy_vllm.yml
+- import_playbook: playbooks/04_deploy_llamastack_distribution.yml

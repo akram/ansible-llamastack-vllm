@@ -1,0 +1,166 @@
+---
+- name: Get vLLM service URL
+  kubernetes.core.k8s_info:
+    api_version: route.openshift.io/v1
+    kind: Route
+    name: vllm
+    namespace: "{{ llamastack_ns }}"
+  register: vllm_route_info
+
+- name: Set vLLM URL fact
+  ansible.builtin.set_fact:
+    vllm_url: "http://{{ vllm_route_info.resources[0].spec.host }}/v1"
+
+- name: Display vLLM URL
+  ansible.builtin.debug:
+    msg: "vLLM URL: {{ vllm_url }}"
+
+- name: Display FMS Orchestrator URL
+  ansible.builtin.debug:
+    msg: "FMS Orchestrator URL: {{ llamastack_distribution.fms_orchestrator_url }}"
+
+- name: Create LlamaStack Distribution CR with vLLM and Milvus DB
+  kubernetes.core.k8s:
+    state: present
+    definition: |
+      apiVersion: llamastack.io/v1alpha1
+      kind: LlamaStackDistribution
+      metadata:
+        name: {{ llamastack_distribution.name }}
+        namespace: {{ llamastack_ns }}
+      spec:
+        replicas: {{ llamastack_distribution.replicas }}
+        server:
+          containerSpec:
+            env:
+              - name: INFERENCE_MODEL
+                value: {{ llamastack_distribution.inference_model }}
+              - name: VLLM_URL
+                value: {{ vllm_url }}
+              - name: MILVUS_DB_PATH
+                value: {{ llamastack_distribution.milvus_db_path }}
+              - name: FMS_ORCHESTRATOR_URL
+                value: {{ llamastack_distribution.fms_orchestrator_url }}
+            name: llama-stack
+            port: {{ llamastack_distribution.port }}
+          distribution:
+            image: {{ llamastack_distribution.image | quote }}
+
+- name: Wait for LlamaStack Distribution to be ready
+  kubernetes.core.k8s_info:
+    api_version: llamastack.io/v1alpha1
+    kind: LlamaStackDistribution
+    name: "{{ llamastack_distribution.name }}"
+    namespace: "{{ llamastack_ns }}"
+  register: distribution_status
+  retries: 30
+  delay: 20
+  until: distribution_status.resources | length > 0
+
+- name: Display LlamaStack Distribution status
+  ansible.builtin.debug:
+    msg: "LlamaStack Distribution Status:"
+  
+- name: Display distribution name
+  ansible.builtin.debug:
+    msg: "- Name: {{ distribution_status.resources[0].metadata.name }}"
+  
+- name: Display distribution namespace
+  ansible.builtin.debug:
+    msg: "- Namespace: {{ distribution_status.resources[0].metadata.namespace }}"
+  
+- name: Display distribution status
+  ansible.builtin.debug:
+    msg: "- Status: {{ distribution_status.resources[0].status | default('Not available yet') }}"
+
+- name: Create LlamaStack Distribution route
+  kubernetes.core.k8s:
+    state: present
+    definition: |
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: {{ llamastack_distribution.name }}
+        namespace: {{ llamastack_ns }}
+        labels:
+          app.kubernetes.io/name: {{ llamastack_distribution.name }}
+      spec:
+        to:
+          kind: Service
+          name: {{ llamastack_distribution.name }}
+          weight: 100
+        port:
+          targetPort: {{ llamastack_distribution.port }}
+        tls:
+          termination: edge
+
+- name: Get LlamaStack Distribution route
+  kubernetes.core.k8s_info:
+    api_version: route.openshift.io/v1
+    kind: Route
+    name: "{{ llamastack_distribution.name }}"
+    namespace: "{{ llamastack_ns }}"
+  register: distribution_route_info
+  retries: 10
+  delay: 5
+  until: distribution_route_info.resources | length > 0
+
+- name: Set distribution route URL fact
+  ansible.builtin.set_fact:
+    distribution_route_url: "http://{{ distribution_route_info.resources[0].spec.host }}"
+
+- name: Display LlamaStack Distribution completion
+  ansible.builtin.debug:
+    msg: "✅ LlamaStack Distribution with vLLM and Milvus DB has been deployed successfully!"
+
+- name: Display distribution details
+  ansible.builtin.debug:
+    msg: "🎯 LlamaStack Distribution Details:"
+
+- name: Display distribution name
+  ansible.builtin.debug:
+    msg: "• Name: {{ llamastack_distribution.name }}"
+
+- name: Display distribution image
+  ansible.builtin.debug:
+    msg: "• Image: {{ llamastack_distribution.image }}"
+
+- name: Display inference model
+  ansible.builtin.debug:
+    msg: "• Inference Model: {{ llamastack_distribution.inference_model }}"
+
+- name: Display vLLM URL
+  ansible.builtin.debug:
+    msg: "• vLLM URL: {{ vllm_url }}"
+
+- name: Display distribution route
+  ansible.builtin.debug:
+    msg: "• Route: {{ distribution_route_url }}"
+
+- name: Display access information
+  ansible.builtin.debug:
+    msg: "📋 Access LlamaStack Distribution:"
+
+- name: Display route access
+  ansible.builtin.debug:
+    msg: "• Web Interface: {{ distribution_route_url }}"
+
+- name: Display API access
+  ansible.builtin.debug:
+    msg: "• API Endpoint: {{ distribution_route_url }}/api"
+
+- name: Display monitoring commands
+  ansible.builtin.debug:
+    msg: "🔍 Monitor the deployment:"
+
+- name: Display kubectl get command
+  ansible.builtin.debug:
+    msg: "kubectl get llamastackdistribution {{ llamastack_distribution.name }} -n {{ llamastack_ns }}"
+
+- name: Display kubectl describe command
+  ansible.builtin.debug:
+    msg: "kubectl describe llamastackdistribution {{ llamastack_distribution.name }} -n {{ llamastack_ns }}"
+
+- name: Display pods command
+  ansible.builtin.debug:
+    msg: "kubectl get pods -n {{ llamastack_ns }} -l app.kubernetes.io/name={{ llamastack_distribution.name }}"

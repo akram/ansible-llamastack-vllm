@@ -1,0 +1,49 @@
+---
+- name: STEP 1 - Install Llama Stack Operator
+  hosts: local
+  gather_facts: false
+
+  module_defaults:
+    kubernetes.core.k8s:
+      kubeconfig: "{{ kubeconfig }}"
+    kubernetes.core.k8s_info:
+      kubeconfig: "{{ kubeconfig }}"
+
+  vars_files:
+    - ../group_vars/all.yml
+
+  tasks:
+    - name: Download Llama Stack operator bundle
+      ansible.builtin.get_url:
+        url: "{{ llamastack_operator_url }}"
+        dest: "{{ playbook_dir }}/../.tmp_llamastack_operator.yaml"
+        force: true
+
+    - name: Apply Llama Stack operator bundle (from upstream)
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ playbook_dir }}/../.tmp_llamastack_operator.yaml"
+
+    - name: Wait for operator namespace to exist
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: llama-stack-k8s-operator-system
+      register: ns_info
+      retries: 30
+      delay: 5
+      until: ns_info.resources | length > 0
+
+    - name: Wait for operator controller to be available
+      kubernetes.core.k8s_info:
+        kind: Deployment
+        api_version: apps/v1
+        namespace: llama-stack-k8s-operator-system
+        label_selectors:
+          - "app.kubernetes.io/name=llama-stack-k8s-operator"
+      register: op_deploy
+      retries: 60
+      delay: 10
+      until: >
+        op_deploy.resources | length > 0 and
+        (op_deploy.resources[0].status.availableReplicas | default(0)) | int >= 1

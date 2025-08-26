@@ -1,0 +1,145 @@
+---
+- name: Ensure RHOAI namespace exists
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ rhoai.namespace }}"
+        labels:
+          openshift.io/cluster-monitoring: "true"
+          pod-security.kubernetes.io/enforce: "privileged"
+          pod-security.kubernetes.io/audit: "privileged"
+          pod-security.kubernetes.io/warn: "privileged"
+
+- name: Ensure OperatorGroup for RHOAI
+  kubernetes.core.k8s:
+    state: present
+    definition: |
+      apiVersion: operators.coreos.com/v1
+      kind: OperatorGroup
+      metadata:
+        name: "{{ rhoai.operatorgroup_name }}"
+        namespace: "{{ rhoai.namespace }}"
+      spec:
+        targetNamespaces:
+          - "{{ rhoai.namespace }}"
+
+- name: Install RHOAI via Subscription
+  kubernetes.core.k8s:
+    state: present
+    definition: |
+      apiVersion: operators.coreos.com/v1alpha1
+      kind: Subscription
+      metadata:
+        name: "{{ rhoai.package }}"
+        namespace: "{{ rhoai.namespace }}"
+      spec:
+        channel: "{{ rhoai.channel }}"
+        installPlanApproval: Automatic
+        name: "{{ rhoai.package }}"
+        source: "{{ rhoai.source }}"
+        sourceNamespace: "{{ rhoai.source_namespace }}"
+
+- name: Wait for RHOAI CRDs to be established
+  kubernetes.core.k8s_info:
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: datascienceclusters.datasciencecluster.opendatahub.io
+  register: rhoai_crd
+  retries: 60
+  delay: 10
+  until: rhoai_crd.resources | length > 0
+
+- name: Create DataScienceCluster instance
+  kubernetes.core.k8s:
+    state: present
+    definition: |
+      apiVersion: datasciencecluster.opendatahub.io/v1
+      kind: DataScienceCluster
+      metadata:
+        name: "{{ rhoai.dsc_name }}"
+        namespace: "{{ rhoai.namespace }}"
+      spec:
+        components:
+          codeflare:
+            managementState: Managed
+          dashboard:
+            managementState: Managed
+          datasciencepipelines:
+            managementState: Managed
+          kserve:
+            managementState: Managed
+          modelmeshserving:
+            managementState: Managed
+          ray:
+            managementState: Managed
+          workbenches:
+            managementState: Managed
+
+- name: Wait for DataScienceCluster to be created and ready
+  kubernetes.core.k8s_info:
+    api_version: datasciencecluster.opendatahub.io/v1
+    kind: DataScienceCluster
+    name: "{{ rhoai.dsc_name }}"
+    namespace: "{{ rhoai.namespace }}"
+  register: dsc_status
+  retries: 30
+  delay: 30
+  until: dsc_status.resources | length > 0
+
+- name: Display DataScienceCluster status
+  ansible.builtin.debug:
+    msg: |
+      DataScienceCluster Status:
+      - Name: {{ dsc_status.resources[0].metadata.name }}
+      - Status: {{ dsc_status.resources[0].status | default('Not available yet') }}
+
+- name: Display RHOAI installation completion
+  ansible.builtin.debug:
+    msg: "✅ Red Hat OpenShift AI (RHOAI) has been installed successfully!"
+
+- name: Display RHOAI components
+  ansible.builtin.debug:
+    msg: "🎯 RHOAI Components Available:"
+  
+- name: List RHOAI components
+  ansible.builtin.debug:
+    msg: "• CodeFlare - Multi-cluster compute orchestration"
+  
+- name: List RHOAI components
+  ansible.builtin.debug:
+    msg: "• Dashboard - Web-based user interface"
+  
+- name: List RHOAI components
+  ansible.builtin.debug:
+    msg: "• Data Science Pipelines - ML workflow orchestration"
+  
+- name: List RHOAI components
+  ansible.builtin.debug:
+    msg: "• KServe - Model serving platform"
+  
+- name: List RHOAI components
+  ansible.builtin.debug:
+    msg: "• ModelMesh - Multi-model serving"
+  
+- name: List RHOAI components
+  ansible.builtin.debug:
+    msg: "• Ray - Distributed computing framework"
+  
+- name: List RHOAI components
+  ansible.builtin.debug:
+    msg: "• Workbenches - Jupyter notebook environments"
+
+- name: Display RHOAI access information
+  ansible.builtin.debug:
+    msg: "📋 Access RHOAI:"
+  
+- name: Show dashboard access
+  ansible.builtin.debug:
+    msg: "• Dashboard: oc get route -n {{ rhoai.namespace }} | grep dashboard"
+  
+- name: Show workbenches access
+  ansible.builtin.debug:
+    msg: "• Workbenches: oc get route -n {{ rhoai.namespace }} | grep workbench"

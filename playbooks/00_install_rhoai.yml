@@ -1,0 +1,16 @@
+---
+- name: STEP 0 - Install Red Hat OpenShift AI (RHOAI)
+  hosts: local
+  gather_facts: false
+
+  module_defaults:
+    kubernetes.core.k8s:
+      kubeconfig: "{{ kubeconfig }}"
+    kubernetes.core.k8s_info:
+      kubeconfig: "{{ kubeconfig }}"
+
+  vars_files:
+    - ../group_vars/all.yml
+
+  roles:
+    - rhoai_operator
