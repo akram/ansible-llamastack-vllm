@@ -73,17 +73,38 @@
   ansible.builtin.debug:
     msg: "- Status: {{ distribution_status.resources[0].status | default('Not available yet') }}"
 
-- name: Create LlamaStack Distribution route
+- name: Create LlamaStack Distribution HTTP route
   kubernetes.core.k8s:
     state: present
     definition: |
       apiVersion: route.openshift.io/v1
       kind: Route
       metadata:
-        name: {{ llamastack_distribution.name }}
+        name: {{ llamastack_distribution.name }}-http
         namespace: {{ llamastack_ns }}
         labels:
           app.kubernetes.io/name: {{ llamastack_distribution.name }}
+          route-type: http
+      spec:
+        to:
+          kind: Service
+          name: {{ llamastack_distribution.name }}-service
+          weight: 100
+        port:
+          targetPort: {{ llamastack_distribution.port }}
+
+- name: Create LlamaStack Distribution HTTPS route
+  kubernetes.core.k8s:
+    state: present
+    definition: |
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: {{ llamastack_distribution.name }}-https
+        namespace: {{ llamastack_ns }}
+        labels:
+          app.kubernetes.io/name: {{ llamastack_distribution.name }}
+          route-type: https
       spec:
         to:
           kind: Service
@@ -94,29 +115,44 @@
         tls:
           termination: edge
 
-- name: Get LlamaStack Distribution route
+- name: Get LlamaStack Distribution HTTP route
   kubernetes.core.k8s_info:
     api_version: route.openshift.io/v1
     kind: Route
-    name: "{{ llamastack_distribution.name }}"
+    name: "{{ llamastack_distribution.name }}-http"
     namespace: "{{ llamastack_ns }}"
-  register: distribution_route_info
+  register: distribution_http_route_info
   retries: 10
   delay: 5
-  until: distribution_route_info.resources | length > 0
+  until: distribution_http_route_info.resources | length > 0
 
-- name: Set distribution route URL fact
+- name: Get LlamaStack Distribution HTTPS route
+  kubernetes.core.k8s_info:
+    api_version: route.openshift.io/v1
+    kind: Route
+    name: "{{ llamastack_distribution.name }}-https"
+    namespace: "{{ llamastack_ns }}"
+  register: distribution_https_route_info
+  retries: 10
+  delay: 5
+  until: distribution_https_route_info.resources | length > 0
+
+- name: Set distribution HTTP route URL fact
   ansible.builtin.set_fact:
-    distribution_route_url: "https://{{ distribution_route_info.resources[0].spec.host }}"
+    distribution_http_route_url: "http://{{ distribution_http_route_info.resources[0].spec.host }}"
+
+- name: Set distribution HTTPS route URL fact
+  ansible.builtin.set_fact:
+    distribution_https_route_url: "https://{{ distribution_https_route_info.resources[0].spec.host }}"
 
 - name: Wait for LlamaStack Distribution service to be ready
   ansible.builtin.pause:
     seconds: 30
-  when: distribution_route_info.resources | length > 0
+  when: distribution_http_route_info.resources | length > 0 and distribution_https_route_info.resources | length > 0
 
-- name: Smoke test - Check LlamaStack Distribution health endpoint
+- name: Smoke test - Check LlamaStack Distribution health endpoint (HTTPS)
   ansible.builtin.uri:
-    url: "{{ distribution_route_url }}/v1/health"
+    url: "{{ distribution_https_route_url }}/v1/health"
     method: GET
     validate_certs: false
     status_code: 200
@@ -131,9 +167,9 @@
     msg: "✅ Health endpoint is responding: {{ health_check.status }}"
   when: health_check is defined and health_check.status is defined
 
-- name: Smoke test - Get available models
+- name: Smoke test - Get available models (HTTPS)
   ansible.builtin.uri:
-    url: "{{ distribution_route_url }}/v1/models"
+    url: "{{ distribution_https_route_url }}/v1/models"
     method: GET
     validate_certs: false
     status_code: 200
@@ -197,29 +233,57 @@
   ansible.builtin.debug:
     msg: "• vLLM URL: {{ vllm_url }}"
 
-- name: Display distribution route
+- name: Display distribution HTTP route
   ansible.builtin.debug:
-    msg: "• Route: {{ distribution_route_url }}"
+    msg: "• HTTP Route: {{ distribution_http_route_url }}"
+
+- name: Display distribution HTTPS route
+  ansible.builtin.debug:
+    msg: "• HTTPS Route: {{ distribution_https_route_url }}"
 
 - name: Display access information
   ansible.builtin.debug:
     msg: "📋 Access LlamaStack Distribution:"
 
-- name: Display route access
+- name: Display HTTP access
   ansible.builtin.debug:
-    msg: "• Web Interface: {{ distribution_route_url }}"
+    msg: "🌐 HTTP Access:"
 
-- name: Display API access
+- name: Display HTTP web interface
   ansible.builtin.debug:
-    msg: "• API Documentation: {{ distribution_route_url }}/docs"
+    msg: "• Web Interface: {{ distribution_http_route_url }}"
 
-- name: Display models endpoint
+- name: Display HTTP API documentation
   ansible.builtin.debug:
-    msg: "• Models Endpoint: {{ distribution_route_url }}/v1/models"
+    msg: "• API Documentation: {{ distribution_http_route_url }}/docs"
 
-- name: Display chat completions endpoint
+- name: Display HTTP models endpoint
   ansible.builtin.debug:
-    msg: "• Chat Completions: {{ distribution_route_url }}/v1/openai/v1/chat/completions"
+    msg: "• Models Endpoint: {{ distribution_http_route_url }}/v1/models"
+
+- name: Display HTTP chat completions endpoint
+  ansible.builtin.debug:
+    msg: "• Chat Completions: {{ distribution_http_route_url }}/v1/openai/v1/chat/completions"
+
+- name: Display HTTPS access
+  ansible.builtin.debug:
+    msg: "🔒 HTTPS Access:"
+
+- name: Display HTTPS web interface
+  ansible.builtin.debug:
+    msg: "• Web Interface: {{ distribution_https_route_url }}"
+
+- name: Display HTTPS API documentation
+  ansible.builtin.debug:
+    msg: "• API Documentation: {{ distribution_https_route_url }}/docs"
+
+- name: Display HTTPS models endpoint
+  ansible.builtin.debug:
+    msg: "• Models Endpoint: {{ distribution_https_route_url }}/v1/models"
+
+- name: Display HTTPS chat completions endpoint
+  ansible.builtin.debug:
+    msg: "• Chat Completions: {{ distribution_https_route_url }}/v1/openai/v1/chat/completions"
 
 - name: Display monitoring commands
   ansible.builtin.debug:
